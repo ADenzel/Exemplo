@@ -167,8 +167,9 @@ class Bot:
             f"Delta: [green]0.00 (neutro)[/]",
         )
 
+        from optimizer.grid_search import PARAM_COLUMNS
         params = " | ".join(f"{k}={v}" for k, v in (self.params or self.p).items()
-                            if k in config.PARAM_GRID)
+                            if k in PARAM_COLUMNS)
 
         layout = Layout()
         layout.split_column(

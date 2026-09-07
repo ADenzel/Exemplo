@@ -111,28 +111,55 @@ class CoreEngine:
     params: dict = field(default_factory=config.as_dict)
     open_symbols: list[str] = field(default_factory=list)
     gatekeeper_on: bool = False
+    held_days: dict = field(default_factory=dict)
 
     @property
     def leverage(self) -> float:
         return self.params["LEVERAGE_CORE"]
 
     def select(self, fundings: dict[str, float]) -> list[str]:
-        """Simbolos elegiveis, ordenados por funding decrescente."""
+        """Cesta alvo com histerese: mantem o que esta bom, troca so com margem."""
         thr = self.params["FUNDING_THRESHOLD_CORE"]
-        elig = [(s, f) for s, f in fundings.items() if f >= thr]
-        elig.sort(key=lambda x: -x[1])
-        return [s for s, _ in elig[: config.MAX_CORE_POSITIONS]]
+        exit_thr = thr * config.CORE_EXIT_FRACTION
 
-    def step(self, capital: float, fundings: dict[str, float]) -> tuple[float, dict]:
-        """Avanca um dia. Retorna (pnl_usdt, info)."""
+        # 1) mantem posicoes cujo funding ainda paga, respeitando hold minimo
+        keep = [s for s in self.open_symbols
+                if fundings.get(s, -1.0) >= exit_thr
+                or self.held_days.get(s, 0) < config.CORE_MIN_HOLD_DAYS]
+        keep = [s for s in keep if s in fundings]
+
+        # 2) candidatos novos acima do threshold de entrada
+        cand = sorted(((s, f) for s, f in fundings.items()
+                       if f >= thr and s not in keep), key=lambda x: -x[1])
+
+        free = config.MAX_CORE_POSITIONS - len(keep)
+        chosen = keep + [s for s, _ in cand[:max(free, 0)]]
+        cand = cand[max(free, 0):]
+
+        # 3) substituicao so se o candidato bater o pior mantido pela margem
+        for sym, f in cand:
+            if not chosen:
+                break
+            worst = min(chosen, key=lambda s: fundings.get(s, 0.0))
+            if (self.held_days.get(worst, 0) >= config.CORE_MIN_HOLD_DAYS
+                    and f - fundings.get(worst, 0.0) > config.CORE_SWITCH_EDGE):
+                chosen[chosen.index(worst)] = sym
+        return chosen[: config.MAX_CORE_POSITIONS]
+
+    def step(self, capital: float, fundings: dict[str, float],
+             signal: dict[str, float] | None = None) -> tuple[float, dict]:
+        """Avanca um dia. `signal` = funding OBSERVAVEL na decisao (D-1);
+        `fundings` = funding efetivamente pago hoje. Retorna (pnl_usdt, info)."""
+        signal = signal if signal is not None else fundings
         stop = self.params["STOP_FUNDING_NEGATIVE"]
-        chosen = self.select(fundings)
-        best = max(fundings.values()) if fundings else 0.0
+        chosen = [s for s in self.select(signal) if s in fundings]
+        best = max(signal.values()) if signal else 0.0
 
         # Gatekeeper: funding do mercado abaixo do stop -> zera tudo e vai pra T-Bill
         if best < stop or not chosen:
             turnover = len(self.open_symbols)
             self.open_symbols = []
+            self.held_days = {}
             self.gatekeeper_on = True
             fees = capital * (config.FEE_RATE + config.SLIPPAGE) * 2 * min(turnover, 1)
             pnl = capital * config.TBILL_DAILY - fees
@@ -140,19 +167,29 @@ class CoreEngine:
 
         self.gatekeeper_on = False
         rotated = len(set(chosen) ^ set(self.open_symbols))
+        self.held_days = {s: self.held_days.get(s, 0) + 1 for s in chosen}
         self.open_symbols = chosen
 
-        per = capital / len(chosen)
-        gross = 0.0
-        for sym in chosen:
-            # PnL = allocation * funding_day * leverage, com decaimento de capacidade
-            notional = per * self.leverage
-            gross += notional * fundings[sym] * capacity_factor(notional)
+        # Capacidade: um desk real nao empurra nocional infinito num par ilíquido.
+        # Aloca ate CAPACITY_PER_SYMBOL de nocional por simbolo; o excedente
+        # fica em caixa rendendo T-Bill em vez de sofrer decaimento de captura.
+        max_notional = config.CAPACITY_PER_SYMBOL * len(chosen)
+        notional = min(capital * self.leverage, max_notional)
+        per_notional = notional / len(chosen)
+        equity_used = notional / self.leverage
+        idle = max(capital - equity_used, 0.0)
+
+        gross = sum(per_notional * fundings[sym] for sym in chosen)
 
         # custos so no giro (entradas/saidas), sobre o nocional alavancado
-        turn_notional = per * self.leverage * rotated
+        turn_notional = per_notional * rotated
         fees = turn_notional * (config.FEE_RATE + config.SLIPPAGE) * 2
-        # custo de carrego da parte alavancada
-        borrow = capital * max(self.leverage - 1.0, 0.0) * config.BORROW_DAILY
+        # custo de carrego apenas sobre a parte efetivamente tomada emprestada
+        borrow = max(notional - equity_used, 0.0) * config.BORROW_DAILY
+        carry = idle * config.TBILL_DAILY
+
         avg_f = sum(fundings[s] for s in chosen) / len(chosen)
-        return gross - fees - borrow, {"mode": "carry", "symbols": chosen, "funding": avg_f}
+        return gross - fees - borrow + carry, {
+            "mode": "carry", "symbols": chosen, "funding": avg_f,
+            "notional": notional, "idle": idle,
+        }

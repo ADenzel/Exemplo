@@ -107,18 +107,33 @@ def run_backtest(params: dict | None = None, market: Market | None = None,
 
     equity = np.empty(n)
     rows = []
+    # EMA do funding = sinal de decisao (defasado 1 dia), suaviza o ruido diario
+    alpha = 2.0 / (config.SIGNAL_EMA_DAYS + 1.0)
+    ema = {}
+    prev_ema: dict[str, float] = {}
     for i in range(n):
-        fundings = {s: float(f_arr[i, j]) for j, s in enumerate(symbols)}
+        # NaN = par ainda nao listado -> nao negociavel
+        fundings = {s: float(f_arr[i, j]) for j, s in enumerate(symbols)
+                    if not np.isnan(f_arr[i, j])}
         crashes = [s for j, s in enumerate(symbols)
                    if detect_crash_series(px_arr[:, j], i)]
 
-        pnl_c, info_c = core.step(sleeves["core"], fundings)
-        pnl_t, info_t = turbo.step(sleeves["turbo"], fundings)
-        pnl_l, info_l = lotto.step(sleeves["lotto"], crashes)
+        # decisao usa a EMA do funding ate D-1 (unico observavel ao entrar)
+        signal = dict(prev_ema) if prev_ema else dict(fundings)
+        signal = {s: v for s, v in signal.items() if s in fundings}
+
+        pnl_c, info_c = core.step(sleeves["core"], fundings, signal)
+        pnl_t, info_t = turbo.step(sleeves["turbo"], fundings, signal)
+        prices_today = {s: float(px_arr[i, j]) for j, s in enumerate(symbols)}
+        pnl_l, info_l = lotto.step(sleeves["lotto"], crashes, prices_today)
 
         sleeves["core"] += pnl_c
         sleeves["turbo"] += pnl_t
         sleeves["lotto"] += pnl_l
+
+        for s_, f_ in fundings.items():
+            ema[s_] = f_ if s_ not in ema else ema[s_] + alpha * (f_ - ema[s_])
+        prev_ema = dict(ema)
 
         total = sum(sleeves.values())
         # rebalanceamento mensal

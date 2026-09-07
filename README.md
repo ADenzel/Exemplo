@@ -115,7 +115,25 @@ chaves configuradas para exercitar o caminho de ordem de verdade
 Mensal: se o sleeve **Turbo > 35%** do equity, move **85% do excesso** para o Core;
 se o **Lotto > 20%**, move **100% do excesso**.
 
-## 8. Aviso
+## 8. Backtest realista de 5 anos
+
+`python realistic_backtest.py` roda 2020-09-06 → 2025-09-06 com funding calibrado
+aos níveis observados na Binance e custos reais (taker 0,10% spot + 0,04% perp,
+slippage, custo de margem, capacidade por símbolo, datas de listagem).
+
+Resultado: **$100.000 → $157.094** (CAGR 9,45%, MaxDD −3,49%, Sharpe 4,73).
+Detalhes, walk-forward e as correções aplicadas: **[REALISTIC_REPORT.md](REALISTIC_REPORT.md)**.
+
+Para usar o histórico REAL da Binance em vez do cenário calibrado:
+
+```bash
+python -m engine.realdata --start 2020-09-06 --end 2025-09-06
+python realistic_backtest.py    # detecta o cache data/real/ sozinho
+```
+
+Requer acesso a `api.binance.com` e `fapi.binance.com` (dados públicos, sem API key).
+
+## 9. Aviso
 
 Os resultados de `REPORT.md` vêm de **dados sintéticos** (GBM por regime com funding
 endógeno ao retorno de 30 dias), não de histórico real de funding da Binance. Servem para

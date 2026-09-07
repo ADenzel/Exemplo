@@ -12,7 +12,7 @@ import pandas as pd
 import config
 from engine.backtest import max_drawdown, run_backtest
 from engine.market import generate
-from optimizer.grid_search import RESULTS_CSV, best_params, top_n
+from optimizer.grid_search import PARAM_COLUMNS, RESULTS_CSV, best_params, top_n
 
 
 def make_charts(res) -> None:
@@ -53,7 +53,7 @@ def main() -> None:
 
     t10 = m["TimeTo10x_days"]
     t10_txt = f"{t10} dias (~{t10/30.44:.1f} meses)" if t10 else "nao atingido"
-    cols = list(config.PARAM_GRID) + ["CAGR", "Sharpe", "MaxDD30d", "FinalCapital", "Objective"]
+    cols = PARAM_COLUMNS + ["CAGR", "Sharpe", "MaxDD30d", "FinalCapital", "Objective"]
 
     md = f"""# REPORT - Bot de Arbitragem Delta-Neutra (Binance Testnet)
 

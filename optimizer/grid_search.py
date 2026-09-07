@@ -24,10 +24,15 @@ RESULTS_CSV = config.DATA_DIR / "optimization_results.csv"
 
 
 def param_combinations(grid: dict | None = None):
+    """Expande o produto cartesiano; a chave ALLOCATION vira as tres alocacoes."""
     grid = grid or config.PARAM_GRID
     keys = list(grid)
     for values in itertools.product(*(grid[k] for k in keys)):
-        yield dict(zip(keys, values))
+        combo = dict(zip(keys, values))
+        alloc = combo.pop("ALLOCATION", None)
+        if alloc is not None:
+            combo["ALOCATION_CORE"], combo["ALOCATION_TURBO"], combo["ALOCATION_LOTTO"] = alloc
+        yield combo
 
 
 def run_grid(market: Market | None = None, grid: dict | None = None,
@@ -44,9 +49,6 @@ def run_grid(market: Market | None = None, grid: dict | None = None,
         feasible = m["MaxDD30d"] > config.MAX_DD_LIMIT
         rows.append({
             **combo,
-            "ALOCATION_CORE": res.params["ALOCATION_CORE"],
-            "ALOCATION_TURBO": res.params["ALOCATION_TURBO"],
-            "ALOCATION_LOTTO": res.params["ALOCATION_LOTTO"],
             "STOP_FUNDING_NEGATIVE": res.params["STOP_FUNDING_NEGATIVE"],
             "CAGR": m["CAGR"], "MaxDD": m["MaxDD"], "MaxDD30d": m["MaxDD30d"],
             "Sharpe": m["Sharpe"], "FinalCapital": m["FinalCapital"],
@@ -69,10 +71,15 @@ def top_n(df: pd.DataFrame, n: int = 3) -> pd.DataFrame:
     return ok.nlargest(n, "Objective")
 
 
+PARAM_COLUMNS = ["ALOCATION_CORE", "ALOCATION_TURBO", "ALOCATION_LOTTO",
+                 "FUNDING_THRESHOLD_CORE", "FUNDING_THRESHOLD_TURBO",
+                 "LEVERAGE_CORE", "TURBO_HOLD_DAYS"]
+
+
 def best_params(df: pd.DataFrame) -> dict:
     row = top_n(df, 1).iloc[0]
     return {k: (int(row[k]) if k == "TURBO_HOLD_DAYS" else float(row[k]))
-            for k in config.PARAM_GRID}
+            for k in PARAM_COLUMNS if k in row}
 
 
 def main() -> pd.DataFrame:
@@ -82,7 +89,7 @@ def main() -> pd.DataFrame:
     print(f"\nResultados salvos em {RESULTS_CSV} ({len(df)} combinacoes)")
 
     top = top_n(df, 3)
-    cols = list(config.PARAM_GRID) + ["CAGR", "Sharpe", "MaxDD30d", "FinalCapital", "Objective"]
+    cols = PARAM_COLUMNS + ["CAGR", "Sharpe", "MaxDD30d", "FinalCapital", "Objective"]
     print("\nTOP 3 por f = CAGR * Sharpe / (1 + |MaxDD|):")
     print(top[cols].to_string(index=False))
 

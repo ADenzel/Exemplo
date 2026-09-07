@@ -48,13 +48,27 @@ TURBO_HOLD_DAYS = 3                 # otimizavel [1, 5]
 
 # ------------------------------------------------------------------ mecanica
 MAX_CORE_POSITIONS = 4
+# Histerese: so troca de simbolo se o candidato bater o atual por uma margem que
+# pague o round-trip. Sem isso a estrategia gira todo dia e as taxas comem o carry.
+CORE_EXIT_FRACTION = 0.5            # segura enquanto funding >= threshold * 0.5
+CORE_SWITCH_EDGE = 0.00025          # vantagem diaria minima para trocar
+CORE_MIN_HOLD_DAYS = 7
+# O funding diario e ruidoso mas persistente: a decisao usa uma EMA, nao o print
+# do dia. Sem isso a estrategia gira ~0.6 simbolo/dia e as taxas superam o carry.
+SIGNAL_EMA_DAYS = 7
 MAX_TURBO_POSITIONS = 4
 TBILL_DAILY = 0.00014               # 0.014% ao dia (caixa / gatekeeper ligado)
 FEE_RATE = 0.0004                   # taker por perna, por giro de nocional
 SLIPPAGE = 0.0002                   # por perna
 LOTTO_CRASH_LOOKBACK = 3            # dias
 LOTTO_CRASH_THRESHOLD = -0.08       # -8% em 3 dias
-LOTTO_TARGET_PROFIT = 0.03          # +3% no repique
+LOTTO_TARGET_PROFIT = 0.03          # +3% no repique (alvo)
+LOTTO_STOP_LOSS = -0.08             # stop se afundar mais 8%
+LOTTO_MAX_HOLD = 5                  # dias ate sair a mercado
+LOTTO_MAX_POSITIONS = 3
+# True reproduz o enunciado (+3% garantido por trade, sem risco).
+# False (padrao) resolve a aposta contra o caminho real de precos.
+LOTTO_DETERMINISTIC = False
 FUNDING_INTERVALS_PER_DAY = 3       # funding a cada 8h
 
 # --------------------------------------------------- capacidade / custo de capital
@@ -83,7 +97,20 @@ IS_END = "2024-01-01"               # in-sample  2021-2023
 OOS_START = "2024-01-01"            # out-of-sample 2024-2026
 
 # ------------------------------------------------------------ grid do otimizador
+# Combinacoes de alocacao (core, turbo, lotto) que somam 1.0
+ALLOCATION_COMBOS = [
+    (0.70, 0.25, 0.05),   # do enunciado
+    (0.75, 0.25, 0.00),
+    (0.70, 0.30, 0.00),
+    (0.80, 0.20, 0.00),
+    (0.60, 0.40, 0.00),
+    (0.90, 0.10, 0.00),
+    (0.65, 0.30, 0.05),
+    (1.00, 0.00, 0.00),
+]
+
 PARAM_GRID = {
+    "ALLOCATION": ALLOCATION_COMBOS,
     "FUNDING_THRESHOLD_CORE": [0.00005, 0.0001, 0.00015, 0.0002, 0.00025, 0.0003],
     "FUNDING_THRESHOLD_TURBO": [0.0008, 0.0012, 0.0016, 0.0020],
     "LEVERAGE_CORE": [1.5, 2.0, 2.5, 3.0],

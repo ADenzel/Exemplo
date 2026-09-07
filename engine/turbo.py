@@ -46,20 +46,25 @@ class TurboEngine:
         return self.scan_extreme_funding(core.get_funding_rates(symbols))
 
     # ------------------------------------------------------------------ step
-    def step(self, capital: float, fundings: dict[str, float]) -> tuple[float, dict]:
-        """Avanca um dia no sleeve Turbo. Retorna (pnl_usdt, info)."""
+    def step(self, capital: float, fundings: dict[str, float],
+             signal: dict[str, float] | None = None) -> tuple[float, dict]:
+        """Avanca um dia no sleeve Turbo. `signal` = funding observavel na
+        decisao (D-1); `fundings` = o que e pago hoje."""
+        signal = signal if signal is not None else fundings
         hold = int(self.params["TURBO_HOLD_DAYS"])
         stop = self.params["STOP_FUNDING_NEGATIVE"]
         pnl = 0.0
         fee_leg = config.FEE_RATE + config.SLIPPAGE
 
         # 1) novas entradas
-        for sym in self.scan_extreme_funding(fundings):
-            self.positions[sym] = TurboPosition(sym, 0.0, 0, fundings[sym])
+        for sym in self.scan_extreme_funding(signal):
+            if sym in fundings:
+                self.positions[sym] = TurboPosition(sym, 0.0, 0, signal[sym])
 
         # 2) dimensiona: o sleeve inteiro e dividido entre as posicoes vivas
         if self.positions:
-            per = capital / len(self.positions) * self.leverage
+            per = min(capital / len(self.positions) * self.leverage,
+                      config.CAPACITY_PER_SYMBOL)
             for pos in self.positions.values():
                 if pos.notional == 0.0:                       # entrada de hoje
                     pnl -= per * fee_leg * 2                  # taxa de abertura
@@ -70,7 +75,7 @@ class TurboEngine:
         closed: list[str] = []
         for sym, pos in list(self.positions.items()):
             f = fundings.get(sym, 0.0)
-            gain = pos.notional * f * core.capacity_factor(pos.notional)
+            gain = pos.notional * f
             pnl += gain
             pos.accrued += gain
             pos.days_held += 1

@@ -17,7 +17,13 @@ def market():
 def walk_forward(market):
     is_mkt = market.slice(config.BACKTEST_START, config.IS_END)      # 2021-2023
     oos_mkt = market.slice(config.OOS_START, config.BACKTEST_END)    # 2024-2026
-    df_is = run_grid(market=is_mkt, verbose=False)
+    # grid reduzido: o teste valida robustez, nao exaustividade
+    grid = {"ALLOCATION": [(0.70, 0.25, 0.05), (0.60, 0.40, 0.00), (1.00, 0.0, 0.0)],
+            "FUNDING_THRESHOLD_CORE": [0.0001, 0.0002, 0.0003],
+            "FUNDING_THRESHOLD_TURBO": [0.0012, 0.0020],
+            "LEVERAGE_CORE": [1.5, 2.5, 3.0],
+            "TURBO_HOLD_DAYS": [1, 3, 5]}
+    df_is = run_grid(market=is_mkt, grid=grid, verbose=False)
     params = best_params(df_is)
     res_is = run_backtest(params, market=is_mkt)
     res_oos = run_backtest(params, market=oos_mkt)
