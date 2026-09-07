@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 import config
+from engine import execution
 from engine.market import Market
 
 # (inicio, fim, media %/8h do BTC, desvio %/8h)
@@ -114,9 +115,13 @@ def generate(start: str = "2020-09-06", end: str = "2025-09-06",
 
 
 # --------------------------------------------------------------- custos reais
+# O custo de execucao vem de engine/execution.py, onde cada componente tem nome
+# proprio. O default e all_taker: o pior caso, e o unico com execucao garantida
+# sem premissa de taxa de preenchimento.
+_EXEC = execution.all_taker()
+
 REAL_COSTS = {
-    "FEE_RATE": 0.0007,             # media ponderada spot 0.10% / perp 0.04%
-    "SLIPPAGE": 0.0005,
+    **_EXEC.as_config(),            # FEE_RATE = one-way completo, SLIPPAGE = 0
     "BORROW_DAILY": 0.00030,        # margem USDT ~ 11% a.a.
     "TBILL_DAILY": 0.00012,         # ~4.5% a.a.
     "CAPACITY_PER_SYMBOL": 400_000.0,

@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 import config
-from engine import calibration, realistic
+from engine import calibration, execution, realistic
 from engine.backtest import run_backtest
 
 START, END = "2020-09-06", "2025-09-06"
@@ -42,8 +42,23 @@ def block_bootstrap(funding, rng, block=30):
     return funding.iloc[idx[:n]].reset_index(drop=True)
 
 
+# Perfil EXIGIDO: sob taker puro os invariantes reprovam (compare_execution.py).
+PERFIL = execution.maker_perp_bnb()
+
+
 def main() -> None:
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL) as perfil:
+        print("0) PERFIL DE EXECUCAO\n")
+        c = perfil.components()
+        print(f"  {perfil.name} (fill {perfil.maker_fill_prob:.0%}, desconto BNB)")
+        print(f"    perna spot (taker)   : {c['spot']:.4%}")
+        print(f"    perna perp (maker)   : {c['perp']:.4%}")
+        print(f"    latencia entre pernas: {c['latencia']:.4%}")
+        print(f"    -> one-way           : {c['one_way']:.4%}")
+        print(f"    -> ROUND-TRIP        : {c['round_trip']:.4%}")
+        print(f"    (taker puro seria    : {execution.all_taker().round_trip():.4%}"
+              f" -- reprova nos invariantes)")
+        print()
         mkt0 = realistic.generate(START, END)
         # o limiar sai da estatistica de funding do MERCADO, nao do P&L
         dp = calibration.calibrate_from_market(mkt0.funding.to_numpy())

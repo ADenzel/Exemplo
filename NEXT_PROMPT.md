@@ -71,7 +71,7 @@ Escreva calibration.py que produz TODOS os parâmetros operacionais a partir
 dos axiomas e de estatísticas de MERCADO. Nenhum retorno da estratégia pode
 entrar nessa conta. Nenhuma constante literal além dos axiomas.
 
-  RT              = (taxa + slippage) × 2
+  RT              = (custo_spot + custo_perp + latência) × 2   # SOMA das pernas
   f_realizado     = funding médio MEDIDO nos H dias SEGUINTES ao gatilho
   hold_empate     = RT / f_realizado
   hold_mínimo     = hold_empate / fee_budget
@@ -85,7 +85,7 @@ entrar nessa conta. Nenhuma constante literal além dos axiomas.
   alavancagem     = 1x se f_realizado < margin_headroom × custo_margem_diário
   perda_do_processo = pior média de funding sustentada por hold_mínimo × alav.
 
-Cinco armadilhas específicas. Todas produzem P&L plausível, então nenhuma é
+Seis armadilhas específicas. Todas produzem P&L plausível, então nenhuma é
 detectável olhando resultado:
 
 1. Empatar não é o critério. taxas/bruto = RT/(H·f). Respeitar o fee_budget
@@ -106,6 +106,11 @@ detectável olhando resultado:
 5. A banda de histerese não é uma fração arbitrária do limiar de entrada.
    Sair e voltar custa um round-trip; a banda tem que ser exatamente o
    round-trip amortizado no hold mínimo.
+
+6. O custo é a SOMA das pernas, nunca a média — as duas carregam o notional
+   cheio. E não use um número único de taxa: modele spot maker, spot taker,
+   perp maker, perp taker e spread como itens separados, senão nenhum teste
+   consegue conferir se a agregação está certa.
 
 Resolva (1) e (2) juntas num ponto fixo: o limiar sobe até o funding realizado
 pagar o round-trip dentro do orçamento, num hold abaixo do teto que você
@@ -190,8 +195,20 @@ ccxt com set_sandbox_mode(True). Spot: testnet.binance.vision (login GitHub).
 Futuros: testnet.binancefuture.com (conta separada, faucet próprio).
 Credenciais em .env, no .gitignore.
 
-Manda o short perp primeiro, confirma o fill, depois o spot. Se a segunda perna
-falhar, desfaz a primeira imediatamente. Nunca deixe perna solta.
+Ordem passiva no perpétuo; no instante em que ela executa, manda o spot a
+mercado. Se a segunda perna falhar, desfaz a primeira imediatamente. Nunca
+deixe perna solta, e NUNCA poste passiva nas duas pernas — se uma executa e a
+outra não, a posição vira direcional. Cobre o custo da latência entre as duas
+explicitamente em vez de tratá-la como grátis.
+
+Verifique se a execução passiva é condição de viabilidade no seu caso: rode os
+invariantes do Passo 5 sob ordem a mercado nas duas pernas E sob passiva no
+perpétuo, e me mostre os dois vereditos. Se só o segundo passar, a execução
+passiva não é otimização — é requisito, e precisa estar escrito como tal.
+
+Cuidado com uma premissa comum e errada: no nível base da Binance a ordem
+passiva no spot não reduz taxa (maker e taker são iguais). Confira a tabela da
+sua conta com fetch_trading_fees() em vez de assumir.
 
 Período do loop: derive do intervalo de funding publicado pela exchange, não
 de um número redondo. Decidir com frequência maior que o pagamento só produz
@@ -245,4 +262,8 @@ falhou e o invariante que o pega.
 | Kill switch pela perda do processo | Era um percentual escolhido a mão |
 | Bloco do bootstrap pela meia-vida | Bloco curto demais destrói a autocorrelação e infla a robustez |
 | Stress com a pior sequência observada | Cenário inventado testa a imaginação, não a estratégia |
+| "Custo é soma das pernas, não média" | Um número único de taxa, documentado de duas formas contraditórias, subestimava o custo em 58% |
+| Componentes de custo com nome próprio | Sem eles nenhum teste consegue conferir a agregação |
+| Rodar invariantes sob taker E sob maker | Revela se execução passiva é requisito ou bônus |
+| Proibir passiva nas duas pernas | Fill parcial deixa a posição direcional |
 | "Conserte o processo, não afrouxe o limite" | A tentação em toda iteração |

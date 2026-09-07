@@ -13,15 +13,20 @@ import numpy as np
 import pytest
 
 import config
-from engine import calibration, realistic
+from engine import calibration, execution, realistic
 from engine.backtest import run_backtest
 
 START, END = "2020-09-06", "2025-09-06"
 
+# Perfil de execucao EXIGIDO pela estrategia, nao uma otimizacao: sob taxas
+# taker puras os invariantes de processo reprovam (ver test_all_taker_reprova).
+# Passiva no perpetuo + agressiva no spot no instante do fill, com desconto BNB.
+PERFIL = execution.maker_perp_bnb()
+
 
 @pytest.fixture(scope="module")
 def derived():
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL):
         mkt = realistic.generate(START, END)
         yield calibration.calibrate_from_market(mkt.funding.to_numpy()), mkt
 
@@ -29,7 +34,7 @@ def derived():
 @pytest.fixture(scope="module")
 def run(derived):
     dp, mkt = derived
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL):
         calibration.apply(dp)
         params = {"ALOCATION_CORE": 1.0, "ALOCATION_TURBO": 0.0, "ALOCATION_LOTTO": 0.0,
                   "FUNDING_THRESHOLD_CORE": dp.entry_threshold,
@@ -100,7 +105,7 @@ def test_taxas_batem_com_o_giro(run):
     """
     res, _, _ = run
     log = res.log
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL):
         esperado = (log["turn_notional"] * (config.FEE_RATE + config.SLIPPAGE)).sum()
     assert abs(esperado - log["fees"].sum()) < 1e-6 * max(log["fees"].sum(), 1.0), \
         f"esperado {esperado:,.2f} vs cobrado {log['fees'].sum():,.2f}"
@@ -116,7 +121,7 @@ def test_taxa_por_troca_e_um_round_trip(run):
     res, _, _ = run
     log = res.log
     trocas = log["rotated"].sum()
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL):
         custo_por_unidade = log["fees"].sum() / (log["turn_notional"].sum())
         assert abs(custo_por_unidade - (config.FEE_RATE + config.SLIPPAGE)) < 1e-12
     assert trocas > 0
@@ -177,7 +182,7 @@ def test_calibracao_independe_de_escala(derived):
     e o modulo estaria escolhendo numeros pelo P&L sem admitir.
     """
     dp, mkt = derived
-    with realistic.real_costs():
+    with realistic.real_costs(), execution.use_profile(PERFIL):
         a = calibration.calibrate_from_market(mkt.funding.to_numpy())
         config.CAPITAL_INICIAL *= 2
         try:
@@ -201,6 +206,72 @@ def test_perda_observada_cabe_na_prevista(run):
     previsto = dp.drawdown_capacity
     assert observado >= previsto * 1.5, \
         f"DD observado {observado:.4%} estoura a capacidade prevista {previsto:.4%}"
+
+
+def test_round_trip_e_soma_de_componentes_nomeados():
+    """O round-trip tem que ser a SOMA das pernas, nunca a media.
+
+    As duas pernas carregam o nocional cheio, entao promediar subestima o custo
+    pela metade. O modelo antigo era um numero unico documentado de duas formas
+    contraditorias, e nenhum teste conseguia pegar porque nao havia componente
+    separado para conferir.
+    """
+    from engine import execution as X
+    for perfil in (X.all_taker(), X.maker_perp(), X.maker_perp_bnb()):
+        c = perfil.components()
+        assert abs(c["one_way"] - (c["spot"] + c["perp"] + c["latencia"])) < 1e-15
+        assert abs(c["round_trip"] - 2 * c["one_way"]) < 1e-15
+        # a soma tem que ser MAIOR que qualquer perna isolada
+        assert c["one_way"] > max(c["spot"], c["perp"])
+
+
+def test_maker_nas_duas_pernas_e_proibido():
+    """Passiva nos dois lados deixa a posicao direcional se so uma executar."""
+    from engine import execution as X
+    with pytest.raises(ValueError, match="hedge"):
+        X.ExecutionProfile("invalido", X.FeeSchedule(),
+                           spot_is_maker=True, perp_is_maker=True)
+
+
+def test_maker_nao_pode_sair_mais_barato_que_o_piso_de_taxa():
+    """Mesmo com preenchimento perfeito, maker paga as taxas maker das pernas."""
+    from engine import execution as X
+    perfil = X.maker_perp(fill_prob=1.0)
+    piso = perfil.fees.spot_taker + perfil.fees.perp_maker
+    assert perfil.one_way() >= piso
+
+
+def test_all_taker_reprova():
+    """A estrategia NAO e viavel so com ordem a mercado. Isto e um resultado.
+
+    Com o custo contabilizado corretamente (soma das duas pernas, nao media),
+    taker puro estoura o orcamento de taxas. Execucao maker na perna de
+    perpetuo nao e uma otimizacao opcional -- e condicao de viabilidade.
+
+    Este teste falha se algum dia taker puro passar: seria sinal de que o
+    modelo de custo voltou a subestimar.
+    """
+    with realistic.real_costs(), execution.use_profile(execution.all_taker()):
+        mkt = realistic.generate(START, END)
+        dp = calibration.calibrate_from_market(mkt.funding.to_numpy())
+        calibration.apply(dp)
+        params = {"ALOCATION_CORE": 1.0, "ALOCATION_TURBO": 0.0,
+                  "ALOCATION_LOTTO": 0.0, "FUNDING_THRESHOLD_TURBO": 0.002,
+                  "TURBO_HOLD_DAYS": 5,
+                  "FUNDING_THRESHOLD_CORE": dp.entry_threshold,
+                  "LEVERAGE_CORE": dp.max_leverage}
+        res = run_backtest(params, market=mkt, keep_log=True)
+        violacoes = calibration.check_health(
+            calibration.process_health(res.log), calibration.health_limits(dp))
+    assert violacoes, "taker puro passou -- o modelo de custo esta subestimando"
+
+
+def test_maker_e_condicao_de_viabilidade_nao_bonus():
+    """O ganho do maker tem que ser material o bastante para virar o veredito."""
+    taker, maker = execution.all_taker(), execution.maker_perp_bnb()
+    assert maker.round_trip() < taker.round_trip()
+    reducao = 1 - maker.round_trip() / taker.round_trip()
+    assert reducao > 0.15, f"maker reduz so {reducao:.1%} do round-trip"
 
 
 def test_nenhuma_constante_magica_na_calibracao():

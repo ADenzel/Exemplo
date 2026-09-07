@@ -40,7 +40,7 @@ falha se alguém acrescentar um quinto.
 Nenhum P&L entra em nenhuma linha:
 
 ```
-RT                = (taxa + slippage) × 2
+RT                = (custo_spot + custo_perp + latência) × 2     # SOMA das pernas
 f_realizado       = funding médio MEDIDO nos H dias SEGUINTES ao gatilho
 hold_empate       = RT / f_realizado
 hold_mínimo       = hold_empate / fee_budget
@@ -55,7 +55,7 @@ alavancagem       = 1x se f_realizado < margin_headroom × custo_margem_diário
 perda_do_processo = pior média de funding sustentada por hold_mínimo × alavancagem
 ```
 
-### Cinco pontos onde a derivação é contraintuitiva
+### Seis pontos onde a derivação é contraintuitiva
 
 Cada um produz P&L plausível quando errado. Nenhum é detectável olhando
 resultado.
@@ -75,6 +75,9 @@ resultado.
 5. **A banda de histerese não é uma fração arbitrária do limiar.** Sair e
    voltar custa um round-trip; a banda é exatamente o round-trip amortizado no
    hold mínimo.
+6. **O custo é a SOMA das pernas, nunca a média.** As duas carregam o notional
+   cheio. Promediar subestima pela metade, e um número único de taxa não deixa
+   nenhum teste conferir — cada componente precisa ter nome próprio.
 
 Os pontos 1 e 2 se resolvem juntos num ponto fixo: o limiar sobe até o funding
 realizado pagar o round-trip dentro do orçamento, num hold abaixo do teto de
@@ -105,9 +108,23 @@ restrição arbitrária que a derivação contradiz.)
 **Gates.** Nenhum símbolo cruza o limiar → sleeve vai a caixa. Kill switch
 derivado da `perda_do_processo`, não de um percentual escolhido.
 
-**Execução.** Limit maker nas duas pernas quando possível. Short perp primeiro,
-confirma fill, depois spot; se a segunda perna falhar, desfaz a primeira
-imediatamente. Nunca perna solta.
+**Execução — é condição de viabilidade, não otimização.** Ordem passiva no
+perpétuo; no instante em que ela executa, o spot é enviado a mercado. O hedge
+nunca fica aberto por mais que a latência, que é cobrada explicitamente em vez
+de tratada como grátis. Se a segunda perna falhar, desfaz a primeira na hora.
+
+**Nunca passiva nas duas pernas.** Se uma executa e a outra não, a posição vira
+direcional — exatamente o que a estratégia proíbe. O modelo de execução recusa
+essa combinação com erro.
+
+Um ponto que costuma ser assumido errado: no nível base da Binance, ordem
+passiva no **spot não reduz taxa nenhuma** (maker e taker são iguais). A
+economia vem da perna de perpétuo e de não cruzar o spread.
+
+Sob ordem a mercado nas duas pernas, com o custo contabilizado corretamente, os
+invariantes de processo **reprovam**. `tests/test_invariants.py::test_all_taker_reprova`
+trava esse resultado: se algum dia taker puro passar, é sinal de que o modelo
+de custo voltou a subestimar.
 
 ## O que não entra, e por quê
 
