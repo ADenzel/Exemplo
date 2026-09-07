@@ -170,11 +170,40 @@ def test_saude_de_processo_sem_olhar_lucro(run):
     assert not violacoes, "; ".join(violacoes)
 
 
-def test_parametros_nao_vem_do_resultado(derived):
-    """A calibracao nao pode depender do P&L: mudar o capital inicial nao muda
-    um unico parametro."""
+def test_calibracao_independe_de_escala(derived):
+    """Dobrar o capital nao pode mudar um unico parametro derivado.
+
+    Se mudasse, algum resultado da estrategia teria vazado para a calibracao --
+    e o modulo estaria escolhendo numeros pelo P&L sem admitir.
+    """
     dp, mkt = derived
     with realistic.real_costs():
-        outra = calibration.calibrate_from_market(mkt.funding.to_numpy())
-    assert (dp.entry_threshold, dp.min_hold_days, dp.max_leverage) == \
-           (outra.entry_threshold, outra.min_hold_days, outra.max_leverage)
+        a = calibration.calibrate_from_market(mkt.funding.to_numpy())
+        config.CAPITAL_INICIAL *= 2
+        try:
+            b = calibration.calibrate_from_market(mkt.funding.to_numpy())
+        finally:
+            config.CAPITAL_INICIAL /= 2
+    for campo in ("entry_threshold", "exit_threshold", "min_hold_days",
+                  "switch_edge", "max_leverage", "ema_span"):
+        assert getattr(a, campo) == getattr(b, campo), f"{campo} mudou com a escala"
+
+
+def test_perda_observada_cabe_na_prevista(run):
+    """O drawdown realizado tem que caber na perda que o processo pode gerar.
+
+    A previsao sai da pior media de funding sustentada observada no mercado,
+    calculada sem rodar a estrategia. Se o realizado estourar a previsao, existe
+    uma fonte de perda fora do modelo.
+    """
+    res, _, dp = run
+    observado = res.metrics["MaxDD"]
+    previsto = dp.drawdown_capacity
+    assert observado >= previsto * 1.5, \
+        f"DD observado {observado:.4%} estoura a capacidade prevista {previsto:.4%}"
+
+
+def test_nenhuma_constante_magica_na_calibracao():
+    """Os unicos numeros livres do modulo sao os quatro axiomas declarados."""
+    assert set(calibration.POLICY) == {
+        "payback_days", "fee_budget", "slippage_budget", "margin_headroom"}

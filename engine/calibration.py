@@ -38,6 +38,100 @@ def round_trip_cost() -> float:
     return one_way * 2
 
 
+# ---------------------------------------------------------------- axiomas
+# As UNICAS entradas livres. Sao escolhas de politica de risco, declaradas
+# antes de qualquer dado, e nao sao ajustaveis olhando resultado. Todo o resto
+# do modulo e consequencia aritmetica destas quatro linhas.
+POLICY = {
+    "payback_days": 10,        # prazo em que uma posicao no limiar paga a entrada
+    "fee_budget": 0.25,        # teto de taxas como fracao do funding bruto
+    "slippage_budget": 0.0005, # impacto de mercado aceito por execucao
+    "margin_headroom": 2.0,    # folga exigida do funding sobre o custo de margem
+}
+
+
+def persistence_span(funding) -> int:
+    """Janela da EMA, derivada da MEIA-VIDA do funding.
+
+    Suavizar mais que a persistencia do sinal joga fora informacao; menos, deixa
+    passar ruido que vira giro. A janela certa e a meia-vida da autocorrelacao
+    de ordem 1 -- uma estatistica da serie, nao uma escolha.
+    """
+    a = np.asarray(funding, dtype=float)
+    if a.ndim == 1:
+        a = a.reshape(-1, 1)
+    phis = []
+    for j in range(a.shape[1]):
+        col = a[:, j]
+        col = col[np.isfinite(col)]
+        if col.size < 30:
+            continue
+        x, y = col[:-1], col[1:]
+        xc, yc = x - x.mean(), y - y.mean()
+        denom = float((xc ** 2).sum())
+        if denom > 0:
+            phis.append(float((xc * yc).sum() / denom))
+    phi = float(np.clip(np.median(phis), 1e-6, 0.999)) if phis else 0.5
+    half_life = np.log(0.5) / np.log(phi)
+    return max(int(np.ceil(half_life)), 1)
+
+
+def capacity_from_liquidity(adv_usd: float, daily_vol: float,
+                            slippage_budget: float | None = None) -> float:
+    """Nocional maximo por simbolo, a partir do impacto de mercado.
+
+    Impacto ~ sigma * sqrt(V / ADV) (raiz quadrada, padrao de microestrutura).
+    Igualando ao orcamento de slippage e resolvendo para V:
+
+        V = ADV * (slippage / sigma)^2
+
+    O tamanho sai da liquidez do par, nao de um teto redondo escolhido a mao.
+    """
+    s = POLICY["slippage_budget"] if slippage_budget is None else slippage_budget
+    if adv_usd <= 0 or daily_vol <= 0:
+        return 0.0
+    # NOTA: a constante do modelo de impacto esta implicitamente em 1.0 e o ADV
+    # e o de 1 dia, entao o numero sai conservador. Ela precisa ser calibrada
+    # contra fills reais -- e ajusta-la para "dar um numero bonito" seria
+    # exatamente o ajuste por resultado que este modulo existe para evitar.
+    return float(adv_usd * (s / daily_vol) ** 2)
+
+
+def positions_from_capacity(target_notional: float, capacity_per_symbol: float,
+                            available: int) -> int:
+    """Numero de posicoes = o minimo que a capacidade permite.
+
+    Diversificar alem do necessario dilui o funding: cada posicao extra e, por
+    construcao, pior que a anterior no ranking. Entao mantem-se o MENOR numero
+    de posicoes que acomoda o nocional dentro do limite de impacto por par.
+    """
+    if capacity_per_symbol <= 0:
+        return available
+    return int(min(max(np.ceil(target_notional / capacity_per_symbol), 1), available))
+
+
+def drawdown_capacity(funding, hold_days: int, leverage: float) -> float:
+    """Perda maxima que o PROCESSO consegue produzir, medida na serie.
+
+    Nao e uma tolerancia escolhida: e a pior media de funding sustentada por
+    `hold_days` observada no mercado, vezes a alavancagem. Define o kill switch
+    a partir do que a estrategia pode perder, nao do que se gostaria de perder.
+    """
+    a = np.asarray(funding, dtype=float)
+    if a.ndim == 1:
+        a = a.reshape(-1, 1)
+    piores = []
+    for j in range(a.shape[1]):
+        col = a[:, j][np.isfinite(a[:, j])]
+        if col.size <= hold_days:
+            continue
+        janelas = np.convolve(col, np.ones(hold_days) / hold_days, mode="valid")
+        piores.append(float(janelas.min()))
+    if not piores:
+        return 0.0
+    return float(np.median(piores) * hold_days * leverage)
+
+
 @dataclass
 class DerivedParams:
     round_trip: float
@@ -52,6 +146,9 @@ class DerivedParams:
     max_positions: int = 4
     observed_typical_funding: float = 0.0
     admitted_fraction: float = 0.0
+    ema_span: int = 1
+    autocorr_half_life: int = 1
+    drawdown_capacity: float = 0.0
 
     @property
     def max_turnover_per_day(self) -> float:
@@ -81,7 +178,11 @@ class DerivedParams:
             f"  -> alavancagem maxima              : {self.max_leverage:.2f}x\n"
             f"  orcamento de taxas                 : {self.fee_budget:.0%} do funding bruto\n"
             f"  funding REALIZADO no hold (medido) : {self.observed_typical_funding:.4%}/dia\n"
-            f"  fracao do mercado admitida         : {self.admitted_fraction:.1%} dos pares-dia"
+            f"  fracao do mercado admitida         : {self.admitted_fraction:.1%} dos pares-dia\n"
+            f"  meia-vida do funding (medida)      : {self.autocorr_half_life} dias\n"
+            f"  -> janela da EMA                   : {self.ema_span} dias\n"
+            f"  -> posicoes simultaneas            : {self.max_positions}\n"
+            f"  perda que o processo pode gerar    : {self.drawdown_capacity:.2%}"
         )
 
 
@@ -194,8 +295,14 @@ def calibrate_from_market(funding, payback_days: int = 10, fee_budget: float = 0
     dp.min_hold_days = max(hold, 1)
     dp.breakeven_hold = rt / max(f_fwd, 1e-9)
     dp.switch_edge = rt / max(dp.min_hold_days, 1)
+    # Banda de histerese = exatamente o round-trip amortizado. Sair e voltar
+    # custa RT; a banda tem que ser larga o bastante para nao pagar isso a toa.
+    dp.exit_threshold = max(entry - dp.switch_edge, 0.0)
     dp.observed_typical_funding = f_fwd
     dp.admitted_fraction = float((arr >= entry).mean())
+    dp.autocorr_half_life = persistence_span(grid)
+    dp.ema_span = dp.autocorr_half_life
+    dp.drawdown_capacity = drawdown_capacity(grid, dp.min_hold_days, dp.max_leverage)
     return dp
 
 

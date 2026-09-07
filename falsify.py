@@ -27,6 +27,7 @@ BASE = {"ALOCATION_CORE": 1.0, "ALOCATION_TURBO": 0.0, "ALOCATION_LOTTO": 0.0,
 
 def build_params(dp):
     cfg = calibration.apply(dp)
+    # SIGNAL_EMA_DAYS e MAX_CORE_POSITIONS ja foram escritos no config por apply()
     return dict(BASE, FUNDING_THRESHOLD_CORE=cfg["FUNDING_THRESHOLD_CORE"],
                 LEVERAGE_CORE=cfg["LEVERAGE_CORE"])
 
