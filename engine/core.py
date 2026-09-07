@@ -173,19 +173,28 @@ class CoreEngine:
         # Capacidade: um desk real nao empurra nocional infinito num par ilíquido.
         # Aloca ate CAPACITY_PER_SYMBOL de nocional por simbolo; o excedente
         # fica em caixa rendendo T-Bill em vez de sofrer decaimento de captura.
-        max_notional = config.CAPACITY_PER_SYMBOL * len(chosen)
-        notional = min(capital * self.leverage, max_notional)
-        per_notional = notional / len(chosen)
-        equity_used = notional / self.leverage
-        idle = max(capital - equity_used, 0.0)
-
-        gross = sum(per_notional * fundings[sym] for sym in chosen)
+        if config.CORE_CAPACITY_MODE == "decay":
+            # modo original: empurra todo o capital e sofre decaimento de captura
+            notional = capital * self.leverage
+            per_notional = notional / len(chosen)
+            equity_used, idle = capital, 0.0
+            gross = sum(per_notional * fundings[sym] * capacity_factor(per_notional)
+                        for sym in chosen)
+        else:
+            max_notional = config.CAPACITY_PER_SYMBOL * len(chosen)
+            notional = min(capital * self.leverage, max_notional)
+            per_notional = notional / len(chosen)
+            equity_used = notional / self.leverage
+            idle = max(capital - equity_used, 0.0)
+            gross = sum(per_notional * fundings[sym] for sym in chosen)
 
         # custos so no giro (entradas/saidas), sobre o nocional alavancado
         turn_notional = per_notional * rotated
         fees = turn_notional * (config.FEE_RATE + config.SLIPPAGE) * 2
         # custo de carrego apenas sobre a parte efetivamente tomada emprestada
-        borrow = max(notional - equity_used, 0.0) * config.BORROW_DAILY
+        borrow = (capital * max(self.leverage - 1.0, 0.0) * config.BORROW_DAILY
+                  if config.CORE_CAPACITY_MODE == "decay"
+                  else max(notional - equity_used, 0.0) * config.BORROW_DAILY)
         carry = idle * config.TBILL_DAILY
 
         avg_f = sum(fundings[s] for s in chosen) / len(chosen)

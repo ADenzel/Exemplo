@@ -56,6 +56,10 @@ CORE_MIN_HOLD_DAYS = 7
 # O funding diario e ruidoso mas persistente: a decisao usa uma EMA, nao o print
 # do dia. Sem isso a estrategia gira ~0.6 simbolo/dia e as taxas superam o carry.
 SIGNAL_EMA_DAYS = 7
+# Flags de auditoria: reproduzem o modelo ORIGINAL (com os defeitos) para medir
+# quanto cada correcao vale. Ver bridge.py. Nao mexa para rodar a estrategia.
+USE_LOOKAHEAD_SIGNAL = False        # True = decide com o funding do proprio dia
+CORE_CAPACITY_MODE = "cap"          # "cap" = excedente em caixa; "decay" = original
 MAX_TURBO_POSITIONS = 4
 TBILL_DAILY = 0.00014               # 0.014% ao dia (caixa / gatekeeper ligado)
 FEE_RATE = 0.0004                   # taker por perna, por giro de nocional

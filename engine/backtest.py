@@ -119,8 +119,11 @@ def run_backtest(params: dict | None = None, market: Market | None = None,
                    if detect_crash_series(px_arr[:, j], i)]
 
         # decisao usa a EMA do funding ate D-1 (unico observavel ao entrar)
-        signal = dict(prev_ema) if prev_ema else dict(fundings)
-        signal = {s: v for s, v in signal.items() if s in fundings}
+        if config.USE_LOOKAHEAD_SIGNAL:
+            signal = dict(fundings)                       # modelo original
+        else:
+            signal = dict(prev_ema) if prev_ema else dict(fundings)
+            signal = {s: v for s, v in signal.items() if s in fundings}
 
         pnl_c, info_c = core.step(sleeves["core"], fundings, signal)
         pnl_t, info_t = turbo.step(sleeves["turbo"], fundings, signal)

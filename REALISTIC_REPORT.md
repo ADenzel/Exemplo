@@ -86,6 +86,45 @@ regime de funding mais rico (ETF, halving, pós-eleição) que 2022-2023.
 
 Stress de 15 dias com funding −0,05%/dia: drawdown de **−0,72%** (limite −2,5%).
 
+## A ponte entre $42,3M e $157k
+
+`python bridge.py` liga uma correção de cada vez, sempre com $100.000 investidos:
+
+| Degrau | Capital final | Fator |
+|---|---:|---:|
+| 0. Modelo original, como entregue | $45.796.242 | — |
+| 1. + remove o look-ahead na seleção | $43.583.698 | 0,95x |
+| 2. + histerese (EMA 7d, hold 7d, margem de troca) | $45.430.199 | 1,04x |
+| 3. + capacidade real (excedente em caixa) | $39.612.572 | 0,87x |
+| **4. + LOTTO vira aposta de verdade** | **$4.344.089** | **0,11x** |
+| 5. + parâmetros reotimizados | $4.353.696 | 1,00x |
+| **6. + funding e custos calibrados ao real** | **$157.095** | **0,04x** |
+
+Duas causas respondem por quase tudo: o LOTTO fictício (**÷9**) e a premissa de
+funding do enunciado (**÷28**). Juntas, ÷250. Os degraus 1-3 e 5 quase se anulam.
+
+O degrau 0 dá $45,8M contra os $42,3M reportados originalmente — resíduo de ~8%
+porque o modo de auditoria não restaura os caminhos antigos de capacidade do
+Turbo e do Lotto. Não muda a conclusão.
+
+### Por que o degrau 6 vale ÷28
+
+A fórmula do enunciado é `funding = 0,0003 + ret_30 · 0,12`, limitada a +0,25%/dia.
+Qualquer retorno de 30 dias acima de +18% gruda a taxa no teto — e num regime de
+alta isso é quase sempre:
+
+| | Enunciado | Real (calibrado) | Razão |
+|---|---:|---:|---:|
+| Funding médio BTC | 37,71% a.a. | 7,92% a.a. | 4,8x |
+| Funding médio da cesta | 36,73% a.a. | 10,95% a.a. | 3,4x |
+| Dias no teto de +0,25%/dia | **48,5%** | **0,0%** | — |
+
+O enunciado assume que metade dos dias paga 0,25% ao dia — 91% ao ano de carry
+puro, sem risco direcional. Isso não acontece: a Binance limita o funding de
+BTC/ETH em ±0,05% por intervalo de 8h (±0,15%/dia), e a média histórica fica
+perto de 0,01% por 8h. Como o carry compõe diariamente, uma taxa 4,8x maior ao
+longo de 1.826 dias não dá 4,8x de resultado — dá 28x.
+
 ## Três correções que mudaram o resultado em duas ordens de grandeza
 
 O modelo do enunciado dava $42M. Sob premissas reais dá $157k. A diferença:
