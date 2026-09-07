@@ -147,6 +147,21 @@ def run_backtest(params: dict | None = None, market: Market | None = None,
         if keep_log:
             rows.append({
                 "date": mkt.dates[i], "equity": total,
+                # --- trilha de auditoria: todo dolar com origem declarada ---
+                "gross": info_c.get("gross", 0.) + info_t.get("gross", 0.),
+                "fees": info_c.get("fees", 0.) + info_t.get("fees", 0.),
+                "borrow": info_c.get("borrow", 0.) + info_t.get("borrow", 0.),
+                "carry": info_c.get("carry", 0.) + info_t.get("carry", 0.),
+                "notional": info_c.get("notional", 0.) + info_t.get("notional", 0.),
+                "delta": info_c.get("delta", 0.) + info_t.get("delta", 0.),
+                "rotated": info_c.get("rotated", 0),
+                "turn_notional": (info_c.get("turn_notional", 0.)
+                                  + info_t.get("turn_notional", 0.)),
+                "core_symbols": tuple(info_c.get("symbols", ())),
+                "core_held_days": info_c.get("held_days", {}),
+                "leverage": p["LEVERAGE_CORE"],
+                "n_core": len(info_c.get("symbols", ())),
+                "n_turbo": info_t.get("open", 0),
                 "core": sleeves["core"], "turbo": sleeves["turbo"],
                 "lotto": sleeves["lotto"],
                 "core_pnl": pnl_c, "turbo_pnl": pnl_t, "lotto_pnl": pnl_l,

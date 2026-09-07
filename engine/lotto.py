@@ -79,7 +79,7 @@ class LottoEngine:
                 per = capital / len(used)
                 for _ in used:
                     size = min(per, config.CAPACITY_PER_SYMBOL)
-                    pnl += size * config.LOTTO_TARGET_PROFIT - size * fee_leg * 2
+                    pnl += size * config.LOTTO_TARGET_PROFIT - size * fee_leg * 2  # entra e sai no mesmo dia
                 self.trades += len(used)
                 idle = max(capital - per * len(used), 0.0)
                 return pnl + idle * config.TBILL_DAILY, \

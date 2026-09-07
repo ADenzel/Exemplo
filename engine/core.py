@@ -161,9 +161,17 @@ class CoreEngine:
             self.open_symbols = []
             self.held_days = {}
             self.gatekeeper_on = True
-            fees = capital * (config.FEE_RATE + config.SLIPPAGE) * 2 * min(turnover, 1)
-            pnl = capital * config.TBILL_DAILY - fees
-            return pnl, {"mode": "tbill", "symbols": [], "funding": best}
+            # gatekeeper fecha as posicoes: um sentido apenas
+            turn_notional = capital * min(turnover, 1)
+            fees = turn_notional * (config.FEE_RATE + config.SLIPPAGE)
+            carry = capital * config.TBILL_DAILY
+            return carry - fees, {
+                "mode": "tbill", "symbols": [], "funding": best,
+                "gross": 0.0, "fees": fees, "borrow": 0.0, "carry": carry,
+                "notional": 0.0, "idle": capital, "rotated": min(turnover, 1),
+                "turn_notional": turn_notional,
+                "delta": 0.0,
+            }
 
         self.gatekeeper_on = False
         rotated = len(set(chosen) ^ set(self.open_symbols))
@@ -189,8 +197,12 @@ class CoreEngine:
             gross = sum(per_notional * fundings[sym] for sym in chosen)
 
         # custos so no giro (entradas/saidas), sobre o nocional alavancado
+        # `rotated` e a diferenca simetrica: ja conta a saida do simbolo antigo
+        # E a entrada do novo. Cada um desses e UM sentido, entao o custo e
+        # one-way por unidade de `rotated` -- multiplicar por 2 aqui cobraria
+        # dois round-trips por uma unica troca.
         turn_notional = per_notional * rotated
-        fees = turn_notional * (config.FEE_RATE + config.SLIPPAGE) * 2
+        fees = turn_notional * (config.FEE_RATE + config.SLIPPAGE)
         # custo de carrego apenas sobre a parte efetivamente tomada emprestada
         borrow = (capital * max(self.leverage - 1.0, 0.0) * config.BORROW_DAILY
                   if config.CORE_CAPACITY_MODE == "decay"
@@ -200,5 +212,11 @@ class CoreEngine:
         avg_f = sum(fundings[s] for s in chosen) / len(chosen)
         return gross - fees - borrow + carry, {
             "mode": "carry", "symbols": chosen, "funding": avg_f,
-            "notional": notional, "idle": idle,
+            "gross": gross, "fees": fees, "borrow": borrow, "carry": carry,
+            "notional": notional, "idle": idle, "rotated": rotated,
+            "turn_notional": turn_notional,
+            # delta liquido: cada posicao e long spot + short perp de mesmo
+            # nocional, logo a exposicao direcional e zero por construcao
+            "delta": 0.0,
+            "held_days": dict(self.held_days),
         }

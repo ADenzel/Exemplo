@@ -1,7 +1,30 @@
 # Estratégia: Cash-and-Carry Cross-Sectional com Rotação Cost-Aware
 
-Desenhada a partir do que os testes deste repositório mostraram — inclusive
-do que eles derrubaram.
+**Os parâmetros não vêm de um otimizador.** Vêm de aritmética de custo, que
+independe da amostra. O backtest entra depois e só para tentar derrubar a
+estratégia — nunca para escolher os números.
+
+## Por que não otimizar
+
+A versão anterior deste documento escolhia parâmetros maximizando
+`f = CAGR · Sharpe / (1 + |MaxDD|)`. Isso é seleção por resultado: ajusta ao
+passado por construção, e os "testes de sanidade" que a acompanhavam
+(`Sharpe < 8`, `CAGR < 40%`) são bandas de resultado — escondem uma estratégia
+boa e aprovam uma quebrada que caia dentro da faixa.
+
+Os três defeitos encontrados neste repositório eram todos violações de
+**processo**, e nenhum exigia olhar o P&L para ser detectado:
+
+| Defeito | Invariante que o pega |
+|---|---|
+| Look-ahead na seleção | perturbar o futuro muda o passado |
+| LOTTO com lucro garantido | conservação de caixa: PnL sem origem declarada |
+| Taxas cobradas em dobro | taxa por troca ≠ um round-trip |
+
+O terceiro só apareceu quando a aritmética previu `taxas/bruto = 0,236` e o
+backtest mediu `0,483` — fator exato de 2. Nenhuma leitura de código o achou;
+duas revisões passaram por cima dele porque ele só se manifestava como
+"resultado um pouco pior".
 
 ## A tese em uma frase
 
@@ -28,6 +51,36 @@ Duas consequências que definem a estratégia inteira:
    No teste original, girar 0,6 símbolo/dia custou $88k de taxas contra $69k de
    funding bruto. A estratégia era estruturalmente perdedora e parecia lucrativa
    só porque outro sleeve imprimia dinheiro.
+
+## Como os parâmetros são derivados
+
+`engine/calibration.py`. Toda a cadeia, sem P&L em nenhum ponto:
+
+```
+RT              = custo de round-trip = (taxa + slippage) × 2        = 0,24%
+f_realizado     = funding MEDIDO nos H dias seguintes ao gatilho     = 0,057%/dia
+hold de empate  = RT / f_realizado                                   = 4,2 dias
+hold mínimo     = hold de empate / orçamento_de_taxas (25%)          = 17 dias
+limiar entrada  = RT / payback (10 dias)                             = 0,024%/dia
+limiar saída    = entrada × 0,5                                      = 0,012%/dia
+margem de troca = RT / hold mínimo                                   = 0,014%/dia
+giro máximo     = n_posições / hold mínimo                           = 0,235/dia
+alavancagem     = 1,0x se funding típico < 2 × custo de margem
+```
+
+Dois pontos que a primeira derivação errou, e como foram corrigidos **sem olhar
+o resultado**:
+
+1. **Empatar não é o critério.** `hold = RT/f` é o ponto de empate. O orçamento
+   exige `taxas/bruto ≤ 25%`, e como `taxas/bruto = RT/(H·f)`, o hold precisa ser
+   `1/0,25 = 4x` o de empate.
+2. **O sinal decai depois que se age sobre ele.** Usar o funding *da entrada*
+   superestima a receita: o símbolo é escolhido num pico e o pico não dura.
+   `f_realizado` é medido como a média do funding nos H dias **seguintes** ao
+   cruzamento do limiar — estatística de mercado, não de estratégia.
+
+Aritmética prevista: `taxas/bruto = 0,236`. Medida no backtest: **0,2387**.
+Erro de 1%. É essa concordância que valida o mecanismo — não o lucro.
 
 ## Regras
 
@@ -69,12 +122,15 @@ tem teto de capital, e fingir que não tem é o erro que produziu $1,1 trilhão 
 primeiro backtest.
 
 ### 5. Alavancagem
-`1,0x a 1,5x`. Não mais.
+**1,0x.** Sem alavancagem.
 
-O grid testou até 3x e a mediana do capital final ficou plana (1,5x → $139k;
-3,0x → $141k). Razão: o custo de margem em USDT (~11% a.a.) consome quase todo
-o funding incremental (~15-19% a.a.), enquanto o risco de liquidação da perna
-short cresce linearmente. Alavancagem aqui compra risco, não retorno.
+Critério, não observação de retorno: alavancar só se justifica se o funding
+típico cobrir o custo de margem com folga de 2x. Com funding realizado de
+0,057%/dia contra custo de margem de 0,030%/dia, a folga é 1,9x — abaixo do
+corte. A regra decide antes de qualquer backtest.
+
+(O piso de 1,5x vinha do enunciado original e foi removido: era uma restrição
+arbitrária que a derivação por custo contradiz.)
 
 ### 6. Gates de risco
 - **Gate de regime:** `f_ema` do melhor símbolo < −0,02%/dia → fecha tudo, caixa.
@@ -97,6 +153,28 @@ short cresce linearmente. Alavancagem aqui compra risco, não retorno.
   motivo — costuma vir com risco de listagem, de depeg ou de squeeze. O sleeve
   contribuiu $12k contra $67k do core, com muito mais risco por dólar.
 
+## Critérios de aprovação (todos de processo)
+
+`python falsify.py` roda a bateria. Nenhum limite é um número mágico: todos
+saem dos mesmos parâmetros derivados.
+
+| Invariante | Limite | Origem do limite |
+|---|---|---|
+| taxas / funding bruto | ≤ 25% | orçamento declarado |
+| (taxas + margem) / bruto | ≤ 50% | 2 × orçamento |
+| giro por dia | ≤ 0,235 | n_posições / hold mínimo |
+| hold médio | ≥ 17 dias | derivado do orçamento |
+| delta máximo | = 0 | definição de delta-neutro |
+| alavancagem máxima | ≤ 1,0x | regra de folga de margem |
+
+Mais três testes que não olham resultado nenhum (`tests/test_invariants.py`):
+causalidade (perturbar o futuro não pode mudar o passado), conservação de caixa
+(todo dólar com origem declarada) e reconciliação de taxas contra a tabela de
+custos recalculada à parte.
+
+**Uma estratégia pode passar em lucro e reprovar aqui.** Aconteceu: com
+`taxas/bruto = 55,7%` o P&L mostrava CAGR de 9% e parecia saudável.
+
 ## Envelope de retorno esperado
 
 | | |
@@ -108,9 +186,18 @@ short cresce linearmente. Alavancagem aqui compra risco, não retorno.
 | Max drawdown esperado | 2–5% |
 | Capacidade antes de degradar | ~$2–5M nesse universo de 8 pares |
 
-**Qualquer backtest que entregue muito acima disso está com defeito.** Foi assim
-que os três erros deste repositório foram encontrados: não pela leitura do
-código, mas por um resultado bom demais.
+Esses números são **consequência**, não alvo. Não são critério de aprovação e
+não devem ser usados como tal — servem só para dimensionar expectativa.
+
+Resultado atual, depois de todas as correções: $100.000 → $187.911 em 5 anos
+(CAGR 13,4%). Subiu em relação aos $157k anteriores porque o bug de taxa em
+dobro estava cobrando o dobro do custo real, não porque algo foi ajustado
+para melhorar.
+
+O Sharpe de 8,9 continua alto demais para carry real (mesas reportam 2-4). Isso
+é limitação do gerador de dados calibrado, cuja série de funding tem volatilidade
+baixa demais — não é resultado. Fica registrado como defeito conhecido em vez de
+ser escondido atrás de um limite de sanidade.
 
 ## O que continua fora do modelo
 

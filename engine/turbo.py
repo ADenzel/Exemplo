@@ -54,6 +54,7 @@ class TurboEngine:
         hold = int(self.params["TURBO_HOLD_DAYS"])
         stop = self.params["STOP_FUNDING_NEGATIVE"]
         pnl = 0.0
+        gross = fees = turn_notional = 0.0
         fee_leg = config.FEE_RATE + config.SLIPPAGE
 
         # 1) novas entradas
@@ -67,7 +68,9 @@ class TurboEngine:
                       config.CAPACITY_PER_SYMBOL)
             for pos in self.positions.values():
                 if pos.notional == 0.0:                       # entrada de hoje
-                    pnl -= per * fee_leg * 2                  # taxa de abertura
+                    fees += per * fee_leg                     # abertura: um sentido
+                    turn_notional += per
+                    pnl -= per * fee_leg
                 pos.notional = per
 
         # 3) carrega funding e envelhece
@@ -76,17 +79,28 @@ class TurboEngine:
         for sym, pos in list(self.positions.items()):
             f = fundings.get(sym, 0.0)
             gain = pos.notional * f
+            gross += gain
             pnl += gain
             pos.accrued += gain
             pos.days_held += 1
             deployed += pos.notional / max(self.leverage, 1e-9)
             if pos.days_held >= hold or f < stop:
-                pnl -= pos.notional * fee_leg * 2             # taxa de fechamento
+                fees += pos.notional * fee_leg                # fechamento: um sentido
+                turn_notional += pos.notional
+                pnl -= pos.notional * fee_leg
                 closed.append(sym)
         for sym in closed:
             del self.positions[sym]
 
         # 4) capital ocioso do sleeve rende T-Bill
         idle = max(capital - deployed, 0.0)
-        pnl += idle * config.TBILL_DAILY
-        return pnl, {"open": len(self.positions), "closed": closed, "idle": idle}
+        carry = idle * config.TBILL_DAILY
+        pnl += carry
+        return pnl, {
+            "open": len(self.positions), "closed": closed, "idle": idle,
+            "gross": gross, "fees": fees, "borrow": 0.0, "carry": carry,
+            "turn_notional": turn_notional,
+            "notional": sum(x.notional for x in self.positions.values()),
+            "delta": 0.0,
+            "held_days": {k: v.days_held for k, v in self.positions.items()},
+        }

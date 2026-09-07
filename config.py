@@ -91,6 +91,7 @@ REBALANCE_LOTTO_MOVE = 1.00
 
 # --------------------------------------------------------------- restricoes
 MAX_DD_LIMIT = -0.05                # janela de 30 dias
+LEVERAGE_CORE_MIN = 1.0             # 1.0x = sem alavancagem (delta neutro puro)
 LEVERAGE_CORE_MAX = 3.0
 LEVERAGE_TURBO_MAX = 1.0
 
@@ -157,8 +158,12 @@ def validate(params: dict | None = None) -> dict:
     total = p["ALOCATION_CORE"] + p["ALOCATION_TURBO"] + p["ALOCATION_LOTTO"]
     if abs(total - 1.0) > 1e-9:
         raise ValueError(f"Alocacoes devem somar 1.0 (soma={total:.6f})")
-    if not (1.5 <= p["LEVERAGE_CORE"] <= LEVERAGE_CORE_MAX):
-        raise ValueError("LEVERAGE_CORE fora de [1.5, 3.0]")
+    # O piso de 1.5x vinha do enunciado. A derivacao por custo
+    # (engine/calibration.py) conclui 1.0x quando o funding tipico nao cobre o
+    # custo de margem com folga, entao o piso operacional e 1.0x.
+    if not (LEVERAGE_CORE_MIN <= p["LEVERAGE_CORE"] <= LEVERAGE_CORE_MAX):
+        raise ValueError(
+            f"LEVERAGE_CORE fora de [{LEVERAGE_CORE_MIN}, {LEVERAGE_CORE_MAX}]")
     if p["LEVERAGE_TURBO"] > LEVERAGE_TURBO_MAX:
         raise ValueError("LEVERAGE_TURBO deve ser <= 1.0")
     if p["STOP_FUNDING_NEGATIVE"] >= 0:
